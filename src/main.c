@@ -22,11 +22,18 @@ HWND g_hwndIncludeEdit;
 HWND g_hwndExcludeLabel;
 HWND g_hwndExcludeEdit;
 HWND g_hwndMatchCount;
+HWND g_hwndInfo;
+
+typedef struct {
+    HWND hwnd;
+    char* window_text;
+    char* class_name;
+} HWND_Info;
 
 typedef struct {
     size_t count;
     size_t capacity;
-    HWND* data;
+    HWND_Info* data;
 } HWNDs;
 
 static HWNDs g_hwnd_targets;
@@ -48,10 +55,13 @@ BOOL CALLBACK EnumWindows_MatchWindowClass(HWND hwnd, LPARAM lParam) {
     if (numChars > 0) {
         char* desired_class_name = (char*) lParam;
         if (0 == strcmp(desired_class_name, class_name)) {
-            da_append(g_hwnd_targets, hwnd);
+            HWND_Info info = {
+                .hwnd = hwnd,
+                .class_name = strdup(class_name),
+                .window_text = NULL,
+            };
+            da_append(g_hwnd_targets, info);
         }
-    //} else {
-    //    DWORD err = GetLastError();
     }
     return TRUE; // keep enumerating
 }
@@ -68,7 +78,7 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
         //WS_EX_CLIENTEDGE,
         WC_EDIT,
         TEXT(""),
-        WS_CHILD | WS_VISIBLE | WS_BORDER,
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOVSCROLL,
         0,0,0,0, // see WM_SIZE
         hwnd, // parent
         NULL,
@@ -91,7 +101,7 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
         //WS_EX_CLIENTEDGE,
         WC_EDIT,
         TEXT(""),
-        WS_CHILD | WS_VISIBLE | WS_BORDER,
+        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOVSCROLL,
         0,0,0,0, // see WM_SIZE
         hwnd, // parent
         NULL,
@@ -121,12 +131,25 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
         NULL);
     if (!g_hwndMatchCount) return FALSE;
 
+    g_hwndInfo = CreateWindow(
+        WC_STATIC,
+        TEXT("?"),
+        WS_CHILD | WS_VISIBLE,
+        0,0,0,0, // see WM_SIZE
+        hwnd, // parent
+        NULL,
+        g_hinst,
+        NULL);
+    if (!g_hwndInfo) return FALSE;
+
     // Somehow, the DEFAULT_GUI_FONT is not the default font, so tell the child windows to use it.
     HGDIOBJ font = GetStockObject(DEFAULT_GUI_FONT);
     SendMessage(g_hwndIncludeLabel, WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndIncludeEdit,  WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndExcludeLabel, WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndExcludeEdit,  WM_SETFONT, (LPARAM) font, TRUE);
+    SendMessage(g_hwndMatchCount,   WM_SETFONT, (LPARAM) font, TRUE);
+    SendMessage(g_hwndInfo,         WM_SETFONT, (LPARAM) font, TRUE);
 
     return TRUE;
 }
@@ -146,6 +169,16 @@ void OnSize(HWND hwnd, UINT state, int cx, int cy) {
     MoveWindow(g_hwndExcludeEdit,  pad + labelw, pad + h, editw,  h, TRUE);
 
     MoveWindow(g_hwndMatchCount, pad, pad + (h * 2), labelw, h, TRUE);
+
+    {
+        int info_region_x = cx / 3;
+        int info_region_y = cy / 3;
+
+        //int x = input_region_x + pad;
+        //int y = pad;
+
+        MoveWindow(g_hwndInfo, pad, info_region_y + pad, cx, cy / 2, TRUE);
+    }
 
 }
 
@@ -192,9 +225,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
         case WM_RBUTTONUP:
         case WM_MOUSEWHEEL: {
             for (size_t i = 0; i < g_hwnd_targets.count; ++i) {
-                HWND target = g_hwnd_targets.data[i];
+                HWND_Info* target = &g_hwnd_targets.data[i];
                 if (target != NULL) {
-                    BOOL ok = PostMessage(target, uiMsg, wParam, lParam);
+                    BOOL ok = PostMessage(target->hwnd, uiMsg, wParam, lParam);
                     if (!ok) {
                         DWORD err = GetLastError();
                         static char buf[256];
@@ -214,11 +247,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
                         static char buf[512];
                         int n = GetWindowText(edit, buf, sizeof(buf));
                         if (n > 0 && (size_t) n < sizeof(buf)) {
-                            //FIXME appends forever (just delete the last char of the match and retype it to see what I mean)
-                            //FIXME probably inefficient to enumerate all windows every time, but what's a girl to do??
+                            //FIXME appends forever (just delete the last char of the match and retype it to see what I mean) (use a hash table)
+                            //FIXME probably inefficient to enumerate all windows every time, but what's a girl to do?? - https://stackoverflow.com/questions/15711311/edit-control-capture-enter-key/15711391#15711391
                             EnumWindows(EnumWindows_MatchWindowClass, (LPARAM) buf);
                             set_match_count(g_hwnd_targets.count);
-                            //TODO actually display the matches
+                            static char buf2[1024];
+                            char* pos = buf2;
+                            size_t rem = sizeof(buf2);
+                            for (size_t i = 0; i < g_hwnd_targets.count; ++i) {
+                                int n2 = snprintf(pos, rem, "%p  %s\n",
+                                    g_hwnd_targets.data[i].hwnd,
+                                    g_hwnd_targets.data[i].class_name);
+                                if (n2 > 0) {
+                                    pos += n2;
+                                    rem -= n2;
+                                } else break;
+                            }
+                            SetWindowText(g_hwndInfo, buf2);
                         }
                         return 0;
                     }
