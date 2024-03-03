@@ -23,6 +23,7 @@ HWND g_hwndExcludeEdit;
 HWND g_hwndMatchCount;
 HWND g_hwndInfo;
 HWND g_hwndUnderCursorInfo;
+HWND g_hwndUnderCursorInfoAlt;
 HWND g_hwndTargetTable;
 
 WNDPROC g_hwndIncludeEditOriginalWndProc;
@@ -208,6 +209,17 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
         NULL);
     if (!g_hwndUnderCursorInfo) return FALSE;
 
+    g_hwndUnderCursorInfoAlt = CreateWindow(
+        WC_STATIC,
+        TEXT("?"),
+        WS_CHILD | WS_VISIBLE,
+        0,0,0,0, // see OnSize
+        hwnd, // parent
+        NULL,
+        g_hinst,
+        NULL);
+    if (!g_hwndUnderCursorInfoAlt) return FALSE;
+
     g_hwndTargetTable = CreateWindow(
         WC_LISTVIEW,
         TEXT("Target Table"),
@@ -256,7 +268,14 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
     SendMessage(g_hwndMatchCount,      WM_SETFONT, (LPARAM) font, TRUE);
     //SendMessage(g_hwndInfo,            WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndUnderCursorInfo, WM_SETFONT, (LPARAM) font, TRUE);
+    SendMessage(g_hwndUnderCursorInfoAlt, WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndTargetTable,     WM_SETFONT, (LPARAM) font, TRUE);
+
+    //TODO this kind of works, but need to click and drag from within the active window out to other windows.  also messes with WM_CLOSE?
+    //SetCapture(hwnd);
+
+    static UINT TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE = 1;
+    SetTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE, 100, NULL);
 
 
     return TRUE;
@@ -296,11 +315,10 @@ void OnSize(HWND hwnd, UINT state, int cx, int cy) {
         int h = cy / 3;
         //int x = pad;
         int y0 = cy / 2; // info_region_y;
-        //place_window(g_hwndUnderCursorInfo, 0 + pad, y0 + pad, cx - pad, cy - pad);
-        //place_window(g_hwndTargetTable,     0 + pad, cy + pad, cx - pad, cy);
         int lh = 16; // line height of single line of text
-        MoveWindow(g_hwndUnderCursorInfo, 0 + pad, y0,            cx - pad * 2, lh, TRUE);
-        MoveWindow(g_hwndTargetTable,     0 + pad, y0 + pad + lh, cx - pad * 2, h - pad, TRUE);
+        MoveWindow(g_hwndUnderCursorInfo,    0 + pad, y0 + (pad + lh) * 0, cx - pad * 2, lh, TRUE);
+        MoveWindow(g_hwndUnderCursorInfoAlt, 0 + pad, y0 + (pad + lh) * 1, cx - pad * 2, lh, TRUE);
+        MoveWindow(g_hwndTargetTable,        0 + pad, y0 + (pad + lh) * 2, cx - pad * 2, h - pad, TRUE);
     }
 
 }
@@ -328,7 +346,7 @@ void OnPrintClient(HWND hwnd, HDC hdc)
 }
 
 
-static void update_cursor_under_window_text(POINT pt) {
+static void update_cursor_under_window_text(HWND hwnd, POINT pt) {
     HWND found = WindowFromPoint(pt);
     static char buf[512];
     buf[0] = 0;
@@ -337,7 +355,7 @@ static void update_cursor_under_window_text(POINT pt) {
         if (n > 0 && (size_t) n < sizeof(buf)) {
             char* p = buf + n;
             GetClassName(found, p, (int) sizeof(buf) - n);
-            SetWindowText(g_hwndUnderCursorInfo, buf);
+            SetWindowText(hwnd, buf);
         }
     }
 }
@@ -354,7 +372,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
         case WM_KEYDOWN: {
             POINT pt;
             if (GetCursorPos(&pt)) {
-                update_cursor_under_window_text(pt);
+                update_cursor_under_window_text(g_hwndUnderCursorInfo, pt);
 
                 static const char* texts[] = {
                     "one",
@@ -409,17 +427,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
         } return 0;
         */
 
-        /* FIXME? works much better if I just wait for spacebar.  This one is funky.
-        case WM_MOUSEMOVE: {
-            POINT pt = {
-                .x = GET_X_LPARAM(lParam),
-                .y = GET_Y_LPARAM(lParam)
-            };
-            if (ClientToScreen(hwnd, &pt)) {
-                update_cursor_under_window_text(pt);
-            }
-        } break;
-        */
+        // FIXME? works much better if I just wait for spacebar.  This one is funky.
+        //case WM_MOUSEMOVE: {
+        //    POINT pt = {
+        //        .x = GET_X_LPARAM(lParam),
+        //        .y = GET_Y_LPARAM(lParam)
+        //    };
+        //    if (ClientToScreen(hwnd, &pt)) {
+        //        update_cursor_under_window_text(g_hwndUnderCursorInfoAlt, pt);
+        //    }
+        //} break;
 
         case WM_LBUTTONDOWN:
         case WM_MBUTTONDOWN:
@@ -445,6 +462,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
             }
         } return 0;
         */
+
+        case WM_TIMER: {
+            OutputDebugStringA("hello\n");
+            // no need to reschedule; SetTimer makes a periodic timer
+            POINT pt;
+            if (GetCursorPos(&pt)) {
+                update_cursor_under_window_text(g_hwndUnderCursorInfoAlt, pt);
+            }
+        } break;
     }
 
 
