@@ -1,14 +1,31 @@
 #define STRICT
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h> // HANDLE_MSG
 #include <stdio.h>
-
-#define array_count(a) (sizeof(a)/sizeof((a)[0]))
+#include <stdlib.h> // realloc
 
 HINSTANCE g_hinst;
 //HWND g_hwndChild;
 
-HWND g_hwnd_targets[16]; // arbitrary limit
+typedef struct {
+    size_t count;
+    size_t capacity;
+    HWND* data;
+} HWNDs;
+
+static HWNDs g_hwnd_targets;
+
+#define da_append(a, it) do { \
+    char ok = 1; \
+    if ((a).count >= (a).capacity) { \
+        size_t desired_capacity = (a).capacity == 0 ? 64 : (a).capacity * 2; \
+        void* new_mem = realloc((a).data, desired_capacity * sizeof(*(a).data)); \
+        ok = (new_mem != NULL); \
+        if (ok) (a).data = new_mem; \
+    } \
+    if (ok) (a).data[(a).count++] = it; \
+} while (0);
 
 void OnSize(HWND hwnd, UINT state, int cx, int cy) {
     //if (g_hwndChild) {
@@ -62,8 +79,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
         case WM_MBUTTONUP:
         case WM_RBUTTONUP:
         case WM_MOUSEWHEEL: {
-            for (size_t i = 0; i < array_count(g_hwnd_targets); ++i) {
-                HWND target = g_hwnd_targets[i];
+            for (size_t i = 0; i < g_hwnd_targets.count; ++i) {
+                HWND target = g_hwnd_targets.data[i];
                 if (target != NULL) {
                     BOOL ok = PostMessage(target, uiMsg, wParam, lParam);
                     if (!ok) {
@@ -98,6 +115,20 @@ BOOL InitApp() {
     return TRUE;
 }
 
+BOOL CALLBACK EnumWindows_MatchWindowClass(HWND hwnd, LPARAM lParam) {
+    static char class_name[512];
+    int numChars = GetClassName(hwnd, class_name, (int) sizeof(class_name));
+    if (numChars > 0) {
+        char* desired_class_name = (char*) lParam;
+        if (0 == strcmp(desired_class_name, class_name)) {
+            da_append(g_hwnd_targets, hwnd);
+        }
+    //} else {
+    //    DWORD err = GetLastError();
+    }
+    return TRUE; // keep enumerating
+}
+
 int WINAPI WinMain(HINSTANCE hinst, HINSTANCE hinstPrev,
     LPSTR lpCmdLine, int nShowCmd)
 {
@@ -110,15 +141,16 @@ int WINAPI WinMain(HINSTANCE hinst, HINSTANCE hinstPrev,
         TEXT(NAME),                     // Title
         WS_OVERLAPPEDWINDOW,            // Style
         CW_USEDEFAULT, CW_USEDEFAULT,   // Position
-        CW_USEDEFAULT, CW_USEDEFAULT,   // Size
+        200, 100,                       // Size // there's nothing in it right now, so it can be small
         NULL,                           // Parent
         NULL,                           // No menu
         hinst,                          // Instance
         0);                             // No special parameters
     ShowWindow(hwnd, nShowCmd);
 
-    HWND target = FindWindow("RenderTestWindowClass", NULL);
-    g_hwnd_targets[0] = target;
+    EnumWindows(EnumWindows_MatchWindowClass, (LPARAM) "RenderTestWindowClass");
+
+    //TODO show this info in the application's window
     //char buf[128];
     //snprintf(buf, sizeof(buf), "RenderTest hwnd = %p\n", (void*) target);
     //MessageBox(hwnd, buf, NULL, MB_OK);
