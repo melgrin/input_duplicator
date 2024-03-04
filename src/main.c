@@ -31,9 +31,13 @@ HWND g_hwndDuplicateModeRadioButton;
 WNDPROC g_hwndIncludeEditOriginalWndProc;
 WNDPROC g_hwndTargetTableOriginalWndProc;
 
+HWND g_currentMode = NULL;
+
+static const UINT TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE = 1;
+
 typedef struct {
     HWND hwnd;
-    char* window_text;
+    char* title;
     char* class_name;
 } HWND_Info;
 
@@ -65,7 +69,7 @@ BOOL CALLBACK EnumWindows_MatchWindowClass(HWND hwnd, LPARAM lParam) {
             HWND_Info info = {
                 .hwnd = hwnd,
                 .class_name = strdup(class_name),
-                .window_text = NULL,
+                .title = NULL,
             };
             da_append(g_hwnd_targets, info);
         }
@@ -300,16 +304,6 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
     SendMessage(g_hwndSelectModeRadioButton, WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndDuplicateModeRadioButton, WM_SETFONT, (LPARAM) font, TRUE);
 
-    
-
-    //TODO this kind of works, but need to click and drag from within the active window out to other windows.  also messes with WM_CLOSE?
-    //SetCapture(hwnd);
-
-    // TODO add a "select" mode, and only do this in that mode (and maybe at a higher rate, like 10 ms)
-    static UINT TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE = 1;
-    SetTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE, 20, NULL);
-
-
     return TRUE;
 }
 
@@ -397,13 +391,63 @@ static void update_cursor_under_window_text(HWND hwnd, POINT pt) {
     }
 }
 
-LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
+LRESULT CALLBACK SelectModeWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK DuplicateModeWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam);
+
+LRESULT CALLBACK BaseWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
     switch (uiMsg) {
         HANDLE_MSG(hwnd, WM_CREATE, OnCreate);
         HANDLE_MSG(hwnd, WM_SIZE, OnSize);
         HANDLE_MSG(hwnd, WM_DESTROY, OnDestroy);
         HANDLE_MSG(hwnd, WM_PAINT, OnPaint);
         case WM_PRINTCLIENT: OnPrintClient(hwnd, (HDC)wParam); return 0;
+
+        case WM_LBUTTONDOWN:
+        case WM_MBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+        case WM_LBUTTONUP:
+        case WM_MBUTTONUP:
+        case WM_RBUTTONUP: {
+            SetFocus(hwnd);
+        } break;
+
+        case WM_MOUSEMOVE:
+        case WM_MOUSEWHEEL: {
+        } break;
+
+        case WM_COMMAND: {
+            if ((HWND) lParam == g_hwndSelectModeRadioButton &&
+                HIWORD(wParam) == BN_CLICKED &&
+                g_currentMode != g_hwndSelectModeRadioButton) {
+
+                // change to "select" mode
+
+                SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR) SelectModeWndProc);
+                g_currentMode = g_hwndSelectModeRadioButton;
+                SetTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE, 20, NULL);
+
+                SetFocus(hwnd); // to allow space/enter/arrows/etc to reach parent window instead of the radio button
+
+            } else if ((HWND) lParam == g_hwndDuplicateModeRadioButton &&
+                HIWORD(wParam) == BN_CLICKED &&
+                g_currentMode != g_hwndDuplicateModeRadioButton) {
+
+                // change to "duplicate" mode
+
+                SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR) DuplicateModeWndProc);
+                g_currentMode = g_hwndDuplicateModeRadioButton;
+                KillTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE);
+
+                SetFocus(hwnd); // to allow space/enter/arrows/etc to reach parent window instead of the radio button
+            }
+        } return 0;
+    }
+
+    return DefWindowProc(hwnd, uiMsg, wParam, lParam);
+}
+
+LRESULT CALLBACK SelectModeWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uiMsg) {
 
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN: {
@@ -412,16 +456,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
                 if (GetCursorPos(&pt)) {
                     update_cursor_under_window_text(g_hwndUnderCursorInfo, pt);
 
-                    static const char* texts[] = {
-                        "one",
-                        "two",
-                        "buckle my shoe"
-                    };
-                    static const size_t num_texts = sizeof(texts) / sizeof(texts[0]);
-
+                    //static const char* texts[] = {
+                    //    "one",
+                    //    "two",
+                    //    "buckle my shoe"
+                    //};
+                    //static const size_t num_texts = sizeof(texts) / sizeof(texts[0]);
+                    //const char* text = texts[index % num_texts];
 
                     int index = ListView_GetItemCount(g_hwndTargetTable); // add to the end
-                    const char* text = texts[index % num_texts];
                     LVITEM lvi = {0};
                     lvi.iItem = index;
                     //lvi.mask = LVIF_TEXT;
@@ -435,82 +478,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
                         snprintf(buf, sizeof(buf), "%p", found);
                         char* handle_string = strdup(buf); // FIXME leak
                         GetWindowText(found, buf, (int) sizeof(buf));
-                        char* title_string = strdup(buf); // FIXME leak
+                        char* title = strdup(buf); // FIXME leak
                         GetClassName(found, buf, (int) sizeof(buf));
-                        char* class_string = strdup(buf); // FIXME leak
+                        char* class_name = strdup(buf); // FIXME leak
                         ListView_SetItemText(g_hwndTargetTable, index, 0, handle_string);
-                        ListView_SetItemText(g_hwndTargetTable, index, 1, title_string);
-                        ListView_SetItemText(g_hwndTargetTable, index, 2, class_string);
+                        ListView_SetItemText(g_hwndTargetTable, index, 1, title);
+                        ListView_SetItemText(g_hwndTargetTable, index, 2, class_name);
+                        HWND_Info hwnd_info = {
+                            .hwnd = found,
+                            .title = title,
+                            .class_name = class_name
+                        };
+                        da_append(g_hwnd_targets, hwnd_info);
                     }
                 }
+                return 0;
             }
         } break;
-
-        /*
-        case WM_SYSKEYDOWN:
-        case WM_SYSKEYUP:
-        case WM_KEYDOWN:
-        case WM_KEYUP: {
-            for (size_t i = 0; i < g_hwnd_targets.count; ++i) {
-                HWND_Info* target = &g_hwnd_targets.data[i];
-                if (target != NULL) {
-                    BOOL ok = PostMessage(target->hwnd, uiMsg, wParam, lParam);
-                    if (!ok) {
-                        DWORD err = GetLastError();
-                        static char buf[256];
-                        snprintf(buf, sizeof(buf), "PostMessage for target %zu failed: error %u", i, err);
-                        OutputDebugString(buf);
-                    }
-                }
-            }
-        } return 0;
-        */
-
-        // FIXME? works much better if I just wait for spacebar.  This one is funky.
-        //case WM_MOUSEMOVE: {
-        //    POINT pt = {
-        //        .x = GET_X_LPARAM(lParam),
-        //        .y = GET_Y_LPARAM(lParam)
-        //    };
-        //    if (ClientToScreen(hwnd, &pt)) {
-        //        update_cursor_under_window_text(g_hwndUnderCursorInfoAlt, pt);
-        //    }
-        //} break;
-
-        case WM_LBUTTONDOWN:
-        case WM_MBUTTONDOWN:
-        case WM_RBUTTONDOWN:
-        case WM_LBUTTONUP:
-        case WM_MBUTTONUP:
-        case WM_RBUTTONUP: {
-            SetFocus(hwnd);
-        } break;
-        case WM_MOUSEWHEEL: {
-        } break;
-
-        case WM_COMMAND: {
-            if (lParam) {
-                HWND h = (HWND) lParam;
-                //if (h == g_hwndIncludeEdit || h == g_hwndExcludeEdit) {
-                //    WORD edit_control_notification_code = HIWORD(wParam);
-                //    if (edit_control_notification_code == EN_CHANGE) {
-                //        // use GetWindowText to see the edit's contents
-                //        return 0;
-                //    }
-                //}
-
-                if (h == g_hwndSelectModeRadioButton) {
-                    if (HIWORD(wParam) == BN_CLICKED) {
-                        // TODO set mode to select
-                    }
-                } else if (h == g_hwndDuplicateModeRadioButton) {
-                    if (HIWORD(wParam) == BN_CLICKED) {
-                        // TODO set mode to duplicate
-                    }
-                }
-
-            }
-        } return 0;
 
         case WM_TIMER: {
             OutputDebugStringA("hello\n");
@@ -522,8 +506,33 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
         } break;
     }
 
+    return CallWindowProc(BaseWndProc, hwnd, uiMsg, wParam, lParam);
+}
 
-    return DefWindowProc(hwnd, uiMsg, wParam, lParam);
+LRESULT CALLBACK DuplicateModeWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
+    switch (uiMsg) {
+
+        case WM_SYSKEYDOWN:
+        case WM_SYSKEYUP:
+        case WM_KEYDOWN:
+        case WM_KEYUP: {
+            for (size_t i = 0; i < g_hwnd_targets.count; ++i) {
+                HWND_Info* target = &g_hwnd_targets.data[i];
+                if (target && target->hwnd) {
+                    BOOL ok = PostMessage(target->hwnd, uiMsg, wParam, lParam);
+                    if (!ok) {
+                        DWORD err = GetLastError();
+                        static char buf[256];
+                        snprintf(buf, sizeof(buf), "PostMessage for target %zu failed: error %u", i, err);
+                        OutputDebugString(buf);
+                    }
+                }
+            }
+        } return 0;
+
+    }
+
+    return CallWindowProc(BaseWndProc, hwnd, uiMsg, wParam, lParam);
 }
 
 #define NAME "Hello"
@@ -531,7 +540,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
 BOOL InitApp() {
     WNDCLASS wc;
     wc.style = 0;
-    wc.lpfnWndProc = WndProc;
+    wc.lpfnWndProc = BaseWndProc;
     wc.cbClsExtra = 0;
     wc.cbWndExtra = 0;
     wc.hInstance = g_hinst;
@@ -565,8 +574,8 @@ int WINAPI WinMain(
         0);                             // No special parameters
     ShowWindow(hwnd, nShowCmd);
 
-    EnumWindows(EnumWindows_MatchWindowClass, (LPARAM) "RenderTestWindowClass");
-    set_match_count(g_hwnd_targets.count);
+    //EnumWindows(EnumWindows_MatchWindowClass, (LPARAM) "RenderTestWindowClass");
+    //set_match_count(g_hwnd_targets.count);
 
     //TODO show this info in the application's window
     //char buf[128];
