@@ -25,6 +25,8 @@ HWND g_hwndInfo;
 HWND g_hwndUnderCursorInfo;
 HWND g_hwndUnderCursorInfoAlt;
 HWND g_hwndTargetTable;
+HWND g_hwndSelectModeRadioButton;
+HWND g_hwndDuplicateModeRadioButton;
 
 WNDPROC g_hwndIncludeEditOriginalWndProc;
 WNDPROC g_hwndTargetTableOriginalWndProc;
@@ -106,19 +108,27 @@ LRESULT CALLBACK MyEditWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lPar
 }
 
 LRESULT CALLBACK MyListViewWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
-    if (uiMsg == WM_KEYDOWN && (wParam == VK_DELETE || wParam == VK_BACK /*backspace*/)) {
-        // Delete all of the selected items
-        while (1) {
-            BOOL deleted = FALSE;
-            for (int i = 0; i < ListView_GetItemCount(hwnd); ++i) {
-                if (ListView_GetItemState(hwnd, i, LVIS_SELECTED)) {
-                    ListView_DeleteItem(hwnd, i);
-                    // ListView_DeleteItem modifies the indices of the list, so 'i' is validated
-                    deleted = TRUE;
-                    break;
+    // https://learn.microsoft.com/en-us/windows/win32/controls/listview-message-processing
+    if (uiMsg == WM_KEYDOWN) {
+        switch (wParam) {
+            case VK_DELETE:
+            case VK_BACK: /*backspace*/ {
+                // Delete all of the selected items
+                while (1) {
+                    BOOL deleted = FALSE;
+                    for (int i = 0; i < ListView_GetItemCount(hwnd); ++i) {
+                        if (ListView_GetItemState(hwnd, i, LVIS_SELECTED)) {
+                            ListView_DeleteItem(hwnd, i);
+                            // ListView_DeleteItem modifies the indices of the list, so 'i' is validated
+                            deleted = TRUE;
+                            break;
+                        }
+                    }
+                    if (!deleted) break;
                 }
-            }
-            if (!deleted) break;
+            } break;
+            //case VK_SPACE: {
+            //} break;
         }
     }
     return CallWindowProc(g_hwndTargetTableOriginalWndProc, hwnd, uiMsg, wParam, lParam);
@@ -258,6 +268,23 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
     DWORD lvstyle = LVS_EX_FULLROWSELECT /*| LVS_EX_ONECLICKACTIVATE*/ | LVS_EX_DOUBLEBUFFER;
     ListView_SetExtendedListViewStyleEx(g_hwndTargetTable, lvstyle, lvstyle);
 
+    // These radio buttons turn out to be grouped by default, but if you want to control it more explictly, use WS_GROUP on the first one.
+    g_hwndSelectModeRadioButton = CreateWindow(
+        "Button",
+        TEXT("Select"),
+        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, // radio
+        0,0,0,0, // see OnSzie
+        hwnd, NULL, g_hinst, 0);
+    if (!g_hwndSelectModeRadioButton) return FALSE;
+    g_hwndDuplicateModeRadioButton = CreateWindow(
+        "Button",
+        TEXT("Duplicate"),
+        WS_CHILD | WS_VISIBLE | BS_AUTORADIOBUTTON, // radio
+        0,0,0,0, // see OnSzie
+        hwnd, NULL, g_hinst, 0);
+    if (!g_hwndDuplicateModeRadioButton) return FALSE;
+
+
 
     // Somehow, the DEFAULT_GUI_FONT is not the default font, so tell the child windows to use it.
     HGDIOBJ font = GetStockObject(DEFAULT_GUI_FONT);
@@ -270,12 +297,17 @@ BOOL OnCreate(HWND hwnd, LPCREATESTRUCT lpcs) {
     SendMessage(g_hwndUnderCursorInfo, WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndUnderCursorInfoAlt, WM_SETFONT, (LPARAM) font, TRUE);
     SendMessage(g_hwndTargetTable,     WM_SETFONT, (LPARAM) font, TRUE);
+    SendMessage(g_hwndSelectModeRadioButton, WM_SETFONT, (LPARAM) font, TRUE);
+    SendMessage(g_hwndDuplicateModeRadioButton, WM_SETFONT, (LPARAM) font, TRUE);
+
+    
 
     //TODO this kind of works, but need to click and drag from within the active window out to other windows.  also messes with WM_CLOSE?
     //SetCapture(hwnd);
 
+    // TODO add a "select" mode, and only do this in that mode (and maybe at a higher rate, like 10 ms)
     static UINT TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE = 1;
-    SetTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE, 100, NULL);
+    SetTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE, 20, NULL);
 
 
     return TRUE;
@@ -300,6 +332,11 @@ void OnSize(HWND hwnd, UINT state, int cx, int cy) {
       MoveWindow(g_hwndExcludeEdit,  pad + labelw, pad + h, editw,  h, TRUE);
 
       MoveWindow(g_hwndMatchCount, pad, pad + (h * 2), labelw, h, TRUE);
+    }
+
+    {
+        MoveWindow(g_hwndSelectModeRadioButton,    pad, cy / 3,      100, 20, TRUE);
+        MoveWindow(g_hwndDuplicateModeRadioButton, pad, cy / 3 + 20, 100, 20, TRUE);
     }
 
     {
@@ -370,42 +407,44 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
 
         case WM_SYSKEYDOWN:
         case WM_KEYDOWN: {
-            POINT pt;
-            if (GetCursorPos(&pt)) {
-                update_cursor_under_window_text(g_hwndUnderCursorInfo, pt);
+            if (wParam == VK_SPACE) {
+                POINT pt;
+                if (GetCursorPos(&pt)) {
+                    update_cursor_under_window_text(g_hwndUnderCursorInfo, pt);
 
-                static const char* texts[] = {
-                    "one",
-                    "two",
-                    "buckle my shoe"
-                };
-                static const size_t num_texts = sizeof(texts) / sizeof(texts[0]);
+                    static const char* texts[] = {
+                        "one",
+                        "two",
+                        "buckle my shoe"
+                    };
+                    static const size_t num_texts = sizeof(texts) / sizeof(texts[0]);
 
 
-                int index = ListView_GetItemCount(g_hwndTargetTable); // add to the end
-                const char* text = texts[index % num_texts];
-                LVITEM lvi = {0};
-                lvi.iItem = index;
-                //lvi.mask = LVIF_TEXT;
-                //lvi.pszText = (char*) text;
+                    int index = ListView_GetItemCount(g_hwndTargetTable); // add to the end
+                    const char* text = texts[index % num_texts];
+                    LVITEM lvi = {0};
+                    lvi.iItem = index;
+                    //lvi.mask = LVIF_TEXT;
+                    //lvi.pszText = (char*) text;
 
-                ListView_InsertItem(g_hwndTargetTable, &lvi);
+                    ListView_InsertItem(g_hwndTargetTable, &lvi);
 
-                HWND found = WindowFromPoint(pt);
-                if (found) {
-                    static char buf[128];
-                    snprintf(buf, sizeof(buf), "%p", found);
-                    char* handle_string = strdup(buf); // FIXME leak
-                    GetWindowText(found, buf, (int) sizeof(buf));
-                    char* title_string = strdup(buf); // FIXME leak
-                    GetClassName(found, buf, (int) sizeof(buf));
-                    char* class_string = strdup(buf); // FIXME leak
-                    ListView_SetItemText(g_hwndTargetTable, index, 0, handle_string);
-                    ListView_SetItemText(g_hwndTargetTable, index, 1, title_string);
-                    ListView_SetItemText(g_hwndTargetTable, index, 2, class_string);
+                    HWND found = WindowFromPoint(pt);
+                    if (found) {
+                        static char buf[128];
+                        snprintf(buf, sizeof(buf), "%p", found);
+                        char* handle_string = strdup(buf); // FIXME leak
+                        GetWindowText(found, buf, (int) sizeof(buf));
+                        char* title_string = strdup(buf); // FIXME leak
+                        GetClassName(found, buf, (int) sizeof(buf));
+                        char* class_string = strdup(buf); // FIXME leak
+                        ListView_SetItemText(g_hwndTargetTable, index, 0, handle_string);
+                        ListView_SetItemText(g_hwndTargetTable, index, 1, title_string);
+                        ListView_SetItemText(g_hwndTargetTable, index, 2, class_string);
+                    }
                 }
             }
-        }
+        } break;
 
         /*
         case WM_SYSKEYDOWN:
@@ -443,32 +482,42 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam) {
         case WM_RBUTTONDOWN:
         case WM_LBUTTONUP:
         case WM_MBUTTONUP:
-        case WM_RBUTTONUP:
+        case WM_RBUTTONUP: {
+            SetFocus(hwnd);
+        } break;
         case WM_MOUSEWHEEL: {
         } break;
 
-        /*
         case WM_COMMAND: {
             if (lParam) {
-                HWND edit = (HWND) lParam;
-                if (edit == g_hwndIncludeEdit || edit == g_hwndExcludeEdit) {
-                    WORD edit_control_notification_code = HIWORD(wParam);
-                    if (edit_control_notification_code == EN_CHANGE) {
-                        // use GetWindowText to see the edit's contents
-                        return 0;
+                HWND h = (HWND) lParam;
+                //if (h == g_hwndIncludeEdit || h == g_hwndExcludeEdit) {
+                //    WORD edit_control_notification_code = HIWORD(wParam);
+                //    if (edit_control_notification_code == EN_CHANGE) {
+                //        // use GetWindowText to see the edit's contents
+                //        return 0;
+                //    }
+                //}
+
+                if (h == g_hwndSelectModeRadioButton) {
+                    if (HIWORD(wParam) == BN_CLICKED) {
+                        // TODO set mode to select
+                    }
+                } else if (h == g_hwndDuplicateModeRadioButton) {
+                    if (HIWORD(wParam) == BN_CLICKED) {
+                        // TODO set mode to duplicate
                     }
                 }
 
             }
         } return 0;
-        */
 
         case WM_TIMER: {
             OutputDebugStringA("hello\n");
             // no need to reschedule; SetTimer makes a periodic timer
             POINT pt;
             if (GetCursorPos(&pt)) {
-                update_cursor_under_window_text(g_hwndUnderCursorInfoAlt, pt);
+                update_cursor_under_window_text(g_hwndUnderCursorInfoAlt, pt); // FIXME flickers at 20 ms
             }
         } break;
     }
