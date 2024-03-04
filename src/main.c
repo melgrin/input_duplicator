@@ -4,6 +4,7 @@
 #include <windowsx.h> // HANDLE_MSG
 #include <stdio.h>
 #include <stdlib.h> // realloc
+#include <stdint.h>
 #include <commctrl.h> // WC_EDIT
 
 #pragma comment(lib, "user32.lib")
@@ -32,6 +33,7 @@ WNDPROC g_hwndIncludeEditOriginalWndProc;
 WNDPROC g_hwndTargetTableOriginalWndProc;
 
 HWND g_currentMode = NULL;
+HWND g_windowUnderCursor = NULL;
 
 static const UINT TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE = 1;
 
@@ -426,6 +428,9 @@ LRESULT CALLBACK BaseWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM lParam
                 g_currentMode = g_hwndSelectModeRadioButton;
                 SetTimer(hwnd, TIMER_ID_WINDOW_UNDER_CURSOR_UPDATE, 20, NULL);
 
+                g_windowUnderCursor = NULL;
+                SetWindowText(g_hwndUnderCursorInfoAlt, "");
+
                 SetFocus(hwnd); // to allow space/enter/arrows/etc to reach parent window instead of the radio button
 
             } else if ((HWND) lParam == g_hwndDuplicateModeRadioButton &&
@@ -497,13 +502,23 @@ LRESULT CALLBACK SelectModeWndProc(HWND hwnd, UINT uiMsg, WPARAM wParam, LPARAM 
         } break;
 
         case WM_TIMER: {
-            OutputDebugStringA("hello\n");
-            // no need to reschedule; SetTimer makes a periodic timer
+            static char buf[256];
             POINT pt;
+            HWND found = NULL;
             if (GetCursorPos(&pt)) {
-                update_cursor_under_window_text(g_hwndUnderCursorInfoAlt, pt); // FIXME flickers at 20 ms
+                found = WindowFromPoint(pt);
             }
-        } break;
+            if (found != g_windowUnderCursor) {
+                //int n = snprintf(buf, sizeof(buf), "under cursor @ (%4u, %4u):    %08llx    ", pt.x, pt.y, (unsigned long long) found);
+                int n = snprintf(buf, sizeof(buf), "under cursor: %08I64X - ", (uint64_t) found);
+                if (n > 0 && (size_t) n < sizeof(buf)) {
+                    char* p = buf + n;
+                    GetClassName(found, p, (int) sizeof(buf) - n);
+                }
+                g_windowUnderCursor = found;
+            }
+            SetWindowText(g_hwndUnderCursorInfoAlt, buf);
+        } return 0;
     }
 
     return CallWindowProc(BaseWndProc, hwnd, uiMsg, wParam, lParam);
@@ -590,4 +605,4 @@ int WINAPI WinMain(
 }
 
 // TODO: allow user to add HWND by typing it in somewhere (extend the search to search "%p" hwnds, not just window titles/classes)
-
+// FIXME: if you click on the already-selected radio button, it takes focus, so VK_SPACE doesn't work to select things anymore
